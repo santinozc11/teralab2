@@ -1,3 +1,4 @@
+SET GLOBAL log_bin_trust_function_creators = 1;
 DROP FUNCTION IF EXISTS `ordered_uuid`;
 
 DROP TABLE IF EXISTS `tweet`;
