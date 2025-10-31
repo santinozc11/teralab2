@@ -3,7 +3,7 @@ env:
   variables:
     AWS_DEFAULT_REGION: us-east-1
     IMAGE_REPO_NAME: lab2-frontend
-    IMAGE_TAG: latest
+
 phases:
   pre_build:
     commands:
@@ -11,20 +11,33 @@ phases:
       - ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
       - REPO_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}"
       - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin ${REPO_URI}
+      - COMMIT=${CODEBUILD_RESOLVED_SOURCE_VERSION:-latest}
+      - IMAGE_TAG=$(echo $COMMIT | cut -c1-7)
+
+      - if [ -f composer.json ]; then
+          docker run --rm -v "$PWD":/app -w /app composer:2 install --no-dev --prefer-dist --no-interaction;
+        fi
+
+      - if [ -d config-dev ]; then
+          rm -rf config && cp -r config-dev config;
+        fi
+
   build:
     commands:
-      - echo "PWD:" && pwd
-      - echo "TREE" && ls -lah
-      - echo "Docker Version:" && docker --version
-      - echo "-----Dockerfile head -----" && head -n 40 Dockerfile || true
+      - echo "Verificación rápida"; pwd; ls -lah | sed -n '1,120p'
+      - test -d vendor && echo "vendor/ presente" || echo "vendor/ NO existe"
+      - test -d config && echo "config/ presente" || echo "config/ NO existe"
       - echo "Build Docker image"
-      - docker build -t ${REPO_URI}:${IMAGE_TAG} .
+      - docker build -t ${REPO_URI}:${IMAGE_TAG} -t ${REPO_URI}:latest .
+
   post_build:
     commands:
       - echo "Push image"
       - docker push ${REPO_URI}:${IMAGE_TAG}
-      - echo "Emit imagedefinitions.json for ECS"
+      - docker push ${REPO_URI}:latest
+      - echo "Emit imagedefinitions.json (usa tag inmutable del commit)"
       - printf '[{"name":"app","imageUri":"%s"}]' "${REPO_URI}:${IMAGE_TAG}" > imagedefinitions.json
+
 artifacts:
   files:
     - imagedefinitions.json
