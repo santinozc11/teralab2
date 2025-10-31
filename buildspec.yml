@@ -13,6 +13,10 @@ phases:
       - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin ${REPO_URI}
   build:
     commands:
+      - echo "PWD:" && pwd
+      - echo "TREE" && ls -lah
+      - echo "Docker Version:" && docker --version
+      - echo "-----Dockerfile head -----" && head -n 40 Dockerfile || true
       - echo "Build Docker image"
       - docker build -t ${REPO_URI}:${IMAGE_TAG} .
   post_build:
