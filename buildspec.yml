@@ -7,37 +7,23 @@ env:
 phases:
   pre_build:
     commands:
-      - set -e
-      - echo "== Docker sanity =="
-      - docker version || true
-      - docker info || true
-      - echo "== Login ECR =="
       - ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
       - REPO_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}"
       - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin ${REPO_URI}
       - COMMIT=${CODEBUILD_RESOLVED_SOURCE_VERSION:-latest}
       - IMAGE_TAG=$(echo $COMMIT | cut -c1-7)
 
-      # Composer (en contenedor) para hidratar vendor/ igual que en tu máquina
-      - echo "== Pull composer:2 =="
-      - docker pull composer:2
-      - echo "== Composer install =="
-      - docker run --rm -v "$PWD":/app -w /app composer:2 install --no-dev --prefer-dist --no-interaction
-
-      # Si usas config-dev, promover a config/ para el build (ajústalo si no aplica)
-      - if [ -d config-dev ]; then rm -rf config && cp -r config-dev config; fi
-
   build:
     commands:
-      - echo "== Árbol previo al build ==" && ls -lah | sed -n '1,120p'
-      - test -d vendor && echo "vendor/ presente" || echo "vendor/ NO presente"
-      - test -d config && echo "config/ presente" || echo "config/ NO presente"
-      - echo "== Build Docker image =="
-      - docker build -t ${REPO_URI}:${IMAGE_TAG} -t ${REPO_URI}:latest .
+      - set -euo pipefail
+      - echo "== CONTENIDO RAÍZ ==" && ls -lah | sed -n '1,200p'
+      - echo "== .dockerignore ==" && (cat .dockerignore || echo "(no existe)")
+      # Build súper verboso para ver el paso exacto que falla
+      - DOCKER_BUILDKIT=0 docker build --pull --no-cache --progress=plain \
+          -t ${REPO_URI}:${IMAGE_TAG} -t ${REPO_URI}:latest .
 
   post_build:
     commands:
-      - echo "== Push =="
       - docker push ${REPO_URI}:${IMAGE_TAG}
       - docker push ${REPO_URI}:latest
       - printf '[{"name":"app","imageUri":"%s"}]' "${REPO_URI}:${IMAGE_TAG}" > imagedefinitions.json
