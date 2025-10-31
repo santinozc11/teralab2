@@ -1,32 +1,45 @@
 version: 0.2
+
 env:
   variables:
     AWS_DEFAULT_REGION: us-east-1
-    IMAGE_REPO_NAME: lab2-frontend
+    IMAGE_REPO_NAME: lab2-frontend         # nombre del repo en ECR
+    CONTAINER_NAME: app                    # nombre EXACTO del contenedor en tu task (frontend)
 
 phases:
   pre_build:
     commands:
+      - set -euo pipefail
+      - echo "== Login a ECR =="
       - ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
       - REPO_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}"
-      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin ${REPO_URI}
-      - COMMIT=${CODEBUILD_RESOLVED_SOURCE_VERSION:-latest}
-      - IMAGE_TAG=$(echo $COMMIT | cut -c1-7)
+      - aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin "${REPO_URI}"
+
+      # Tag inmutable = SHA corto del commit (fallback por si no viene la variable)
+      - COMMIT="${CODEBUILD_RESOLVED_SOURCE_VERSION:-manual}"
+      - IMAGE_TAG="$(echo "$COMMIT" | cut -c1-7)"
+      - if [ -z "$IMAGE_TAG" ] || [ "$IMAGE_TAG" = "manual" ]; then IMAGE_TAG="manual-$(date +%Y%m%d%H%M%S)"; fi
+      - echo "Usando tag: ${IMAGE_TAG}"
 
   build:
     commands:
-      - set -euo pipefail
-      - echo "== CONTENIDO RAÍZ ==" && ls -lah | sed -n '1,200p'
-      - echo "== .dockerignore ==" && (cat .dockerignore || echo "(no existe)")
-      # Build súper verboso para ver el paso exacto que falla
-      - DOCKER_BUILDKIT=0 docker build --pull --no-cache --progress=plain \
-          -t ${REPO_URI}:${IMAGE_TAG} -t ${REPO_URI}:latest .
+      - echo "== Contenido del contexto =="
+      - ls -lah | sed -n '1,120p'
+      - echo "== .dockerignore (si existe) ==" && { cat .dockerignore || echo "(no hay)"; }
+
+      # Build consistente (BuildKit ON si querés ver progreso 'plain')
+      - DOCKER_BUILDKIT=1 docker build --pull --no-cache --progress=plain \
+          -t "${REPO_URI}:${IMAGE_TAG}" -t "${REPO_URI}:latest" .
 
   post_build:
     commands:
-      - docker push ${REPO_URI}:${IMAGE_TAG}
-      - docker push ${REPO_URI}:latest
-      - printf '[{"name":"app","imageUri":"%s"}]' "${REPO_URI}:${IMAGE_TAG}" > imagedefinitions.json
+      - echo "== Push a ECR =="
+      - docker push "${REPO_URI}:${IMAGE_TAG}"
+      - docker push "${REPO_URI}:latest"
+
+      - echo "== imagedefinitions.json para ECS (usa tag inmutable) =="
+      - printf '[{"name":"%s","imageUri":"%s"}]\n' "${CONTAINER_NAME}" "${REPO_URI}:${IMAGE_TAG}" > imagedefinitions.json
+      - cat imagedefinitions.json
 
 artifacts:
   files:
