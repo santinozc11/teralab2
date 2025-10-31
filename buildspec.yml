@@ -9,31 +9,49 @@ env:
 phases:
   pre_build:
     commands:
-      - set -euo pipefail
-      - echo "== Login a ECR =="
-      - ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-      - REPO_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}"
-      - aws ecr get-login-password --region "${AWS_DEFAULT_REGION}" | docker login --username AWS --password-stdin "${REPO_URI}"
-      - COMMIT="${CODEBUILD_RESOLVED_SOURCE_VERSION:-manual}"
-      - IMAGE_TAG="$(echo "$COMMIT" | cut -c1-7)"
-      - if [ -z "$IMAGE_TAG" ] || [ "$IMAGE_TAG" = "manual" ]; then IMAGE_TAG="manual-$(date +%Y%m%d%H%M%S)"; fi
-      - echo "Usando tag: ${IMAGE_TAG}"
+      - |
+        set -euo pipefail
+        echo "== Login a ECR =="
+        ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+        REPO_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}"
+        aws ecr get-login-password --region "${AWS_DEFAULT_REGION}" \
+          | docker login --username AWS --password-stdin "${REPO_URI}"
+
+        # Tag inmutable desde el commit (fallback con timestamp)
+        COMMIT="${CODEBUILD_RESOLVED_SOURCE_VERSION:-manual}"
+        IMAGE_TAG="$(echo "${COMMIT}" | cut -c1-7)"
+        if [ -z "${IMAGE_TAG}" ] || [ "${IMAGE_TAG}" = "manual" ]; then
+          IMAGE_TAG="manual-$(date +%Y%m%d%H%M%S)"
+        fi
+        echo "Usando tag: ${IMAGE_TAG}"
+
+        # Persistir variables para las siguientes fases
+        printf 'REPO_URI=%s\nIMAGE_TAG=%s\n' "${REPO_URI}" "${IMAGE_TAG}" > build.env
 
   build:
     commands:
-      - echo "== Contenido del contexto ==" && ls -lah | sed -n '1,120p'
-      - echo "== .dockerignore (si existe) ==" && { cat .dockerignore || echo "(no hay)"; }
-      - echo "== Docker build =="
-      - DOCKER_BUILDKIT=1 docker build --pull --no-cache --progress=plain -t "${REPO_URI}:${IMAGE_TAG}" -t "${REPO_URI}:latest" .
+      - |
+        set -euo pipefail
+        source build.env
+        echo "== Contenido del contexto ==" && ls -lah | sed -n '1,120p'
+        echo "== Docker build =="
+        # Usa BuildKit para permitir --progress=plain
+        DOCKER_BUILDKIT=1 docker build --pull --no-cache --progress=plain \
+          -t "${REPO_URI}:${IMAGE_TAG}" -t "${REPO_URI}:latest" .
 
   post_build:
     commands:
-      - echo "== Push a ECR =="
-      - docker push "${REPO_URI}:${IMAGE_TAG}"
-      - docker push "${REPO_URI}:latest"
-      - echo "== imagedefinitions.json para ECS =="
-      - printf '[{"name":"%s","imageUri":"%s"}]\n' "${CONTAINER_NAME}" "${REPO_URI}:${IMAGE_TAG}" > imagedefinitions.json
-      - cat imagedefinitions.json
+      - |
+        set -euo pipefail
+        source build.env
+        echo "== Push a ECR =="
+        docker push "${REPO_URI}:${IMAGE_TAG}"
+        docker push "${REPO_URI}:latest"
+
+        echo "== Generar imagedefinitions.json =="
+        printf '[{"name":"%s","imageUri":"%s"}]\n' \
+          "${CONTAINER_NAME}" "${REPO_URI}:${IMAGE_TAG}" > imagedefinitions.json
+        cat imagedefinitions.json
 
 artifacts:
   files:
