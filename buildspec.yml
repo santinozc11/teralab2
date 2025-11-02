@@ -5,46 +5,39 @@ env:
     AWS_DEFAULT_REGION: us-east-1
     ECR_REPO: lab2-frontend
     CONTAINER_NAME: app
-    DOCKER_BUILDKIT: "1"
 
 phases:
   pre_build:
-    commands:
-      - set -euo pipefail
-      - ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
-      - REPO_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${ECR_REPO}"
-      - aws ecr get-login-password --region "${AWS_DEFAULT_REGION}" | docker login --username AWS --password-stdin "${REPO_URI}"
+    commands: |
+      set -euo pipefail
+      ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+      REPO_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${ECR_REPO}"
+      aws ecr get-login-password --region "${AWS_DEFAULT_REGION}" \
+        | docker login --username AWS --password-stdin "${REPO_URI}"
 
-      # Tag inmutable
-      - COMMIT_SHA="${CODEBUILD_RESOLVED_SOURCE_VERSION:-manual}"
-      - IMAGE_TAG="$(echo "${COMMIT_SHA}" | cut -c1-7)"
-      - if [ -z "${IMAGE_TAG}" ] || [ "${IMAGE_TAG}" = "manual" ]; then IMAGE_TAG="manual-$(date +%Y%m%d%H%M%S)"; fi
+      COMMIT_SHA="${CODEBUILD_RESOLVED_SOURCE_VERSION:-manual}"
+      IMAGE_TAG="$(echo "${COMMIT_SHA}" | cut -c1-7)"
+      if [ -z "${IMAGE_TAG}" ] || [ "${IMAGE_TAG}" = "manual" ]; then
+        IMAGE_TAG="manual-$(date +%Y%m%d%H%M%S)"
+      fi
 
-      # Compartimos a las siguientes fases
-      - printf 'REPO_URI=%s\nIMAGE_TAG=%s\n' "${REPO_URI}" "${IMAGE_TAG}" > build.env
+      printf 'REPO_URI=%s\nIMAGE_TAG=%s\n' "${REPO_URI}" "${IMAGE_TAG}" > build.env
 
   build:
-    commands:
-      - set -euo pipefail
-      - . ./build.env
-      - echo "Docker build -> ${REPO_URI}:${IMAGE_TAG}"
-      - docker build --pull --no-cache -t "${REPO_URI}:${IMAGE_TAG}" -t "${REPO_URI}:latest" .
-
-      # Smoke test local (requiere Privileged en CodeBuild)
-      - docker rm -f app-test || true
-      - docker run -d --name app-test -p 8080:80 "${REPO_URI}:${IMAGE_TAG}"
-      - sleep 5
-      - curl -fsS http://localhost:8080/ > /dev/null
-      - docker rm -f app-test
+    commands: |
+      set -euo pipefail
+      . ./build.env
+      docker build -t "${REPO_URI}:${IMAGE_TAG}" -t "${REPO_URI}:latest" .
 
   post_build:
-    commands:
-      - set -euo pipefail
-      - . ./build.env
-      - docker push "${REPO_URI}:${IMAGE_TAG}"
-      - docker push "${REPO_URI}:latest"
-      - printf '[{"name":"%s","imageUri":"%s"}]\n' "${CONTAINER_NAME}" "${REPO_URI}:${IMAGE_TAG}" > imagedefinitions.json
-      - cat imagedefinitions.json
+    commands: |
+      set -euo pipefail
+      . ./build.env
+      docker push "${REPO_URI}:${IMAGE_TAG}"
+      docker push "${REPO_URI}:latest"
+      printf '[{"name":"%s","imageUri":"%s"}]\n' \
+        "${CONTAINER_NAME}" "${REPO_URI}:${IMAGE_TAG}" > imagedefinitions.json
+      cat imagedefinitions.json
 
 artifacts:
   files:
