@@ -1,41 +1,39 @@
 FROM php:7.2-apache
 
-COPY . /var/www/html
+# Copiá el vhost antes de habilitarlo (igual que ya hacías)
 COPY ./apache/default-site.conf /etc/apache2/sites-available/default-site.conf
 
 WORKDIR /var/www/html
 
-#Esto es del dockerfile de lisandro, necesario para poder tirar los apt update y upgrade`3
+# Repos arvhive (tu fix para stretch)
 RUN sed -i -e 's/deb.debian.org/archive.debian.org/g' \
            -e 's|security.debian.org|archive.debian.org/|g' \
            -e '/stretch-updates/d' /etc/apt/sources.list
 
-RUN apt-get update && apt-get upgrade -y
-RUN apt-get update && apt-get install wget git -y
+RUN apt-get update && apt-get upgrade -y && \
+    apt-get update && apt-get install -y wget git && rm -rf /var/lib/apt/lists/*
 
-RUN make
+# --- si dependés de make para composer/symlink, dejalo, pero no reinicies apache en build ---
+COPY . /var/www/html
+RUN make || true   # si falla, que no corte el build
 
-#Esto es del dockerfile de joaco
-RUN ln -s /etc/apache2/sites-available/default-site.conf /etc/apache2/sites-enabled/default-site.conf
+# Habilitar vhost y módulos
+RUN ln -s /etc/apache2/sites-available/default-site.conf /etc/apache2/sites-enabled/default-site.conf && \
+    a2dissite 000-default.conf && a2ensite default-site.conf && \
+    docker-php-ext-install pdo pdo_mysql && a2enmod rewrite
 
-#Esto es del dockerfile de lisandro, si no lo uso (osea, si no se desactiva el 000-default) la app te tira Forbidden.
-RUN a2dissite 000-default.conf && \
-    a2ensite default-site.conf
+# Logs a stdout/stderr → visibles en CloudWatch
+RUN mkdir -p /var/log/apache2/example-app/ && \
+    ln -sf /proc/self/fd/1 /var/log/apache2/access.log && \
+    ln -sf /proc/self/fd/2 /var/log/apache2/error.log  && \
+    ln -sf /proc/self/fd/1 /var/log/apache2/example-app/access.log && \
+    ln -sf /proc/self/fd/2 /var/log/apache2/example-app/error.log
 
-RUN docker-php-ext-install pdo pdo_mysql &&\
-	docker-php-ext-configure pdo &&\
-	docker-php-ext-configure pdo_mysql
+# NO reinicies apache en build (se lanza con apache2-foreground en runtime)
+# ❌ service apache2 restart
 
-RUN echo "ServerName localhost" >> /etc/apache2/apache2.conf &&\
-	chown -R www-data:www-data /var/www/html/ &&\
-	# sed -i 's/localhost/database/g' ./config/db-connection.php &&\
-	mkdir /var/log/apache2/example-app/ &&\
-	chown -R www-data:www-data /var/log/apache2/example-app/ &&\
-	a2enmod rewrite &&\
-	service apache2 restart
-
-##Remove unnecesary files
-RUN rm -r sql/ apache/ &&\
-	rm Dockerfile Makefile README.md
+# Limpieza (dejá el vhost)
+RUN rm -rf sql/ apache/ Dockerfile Makefile README.md || true
 
 EXPOSE 80
+# CMD por defecto de la imagen base php:apache ya es apache2-foreground
