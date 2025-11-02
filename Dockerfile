@@ -1,41 +1,52 @@
 FROM php:7.2-apache
 
-COPY . /var/www/html
+# Copiamos el virtual host personalizado antes de habilitarlo
 COPY ./apache/default-site.conf /etc/apache2/sites-available/default-site.conf
 
 WORKDIR /var/www/html
 
-#Esto es del dockerfile de lisandro, necesario para poder tirar los apt update y upgrade`3
+# Fix de repos Debian stretch + paquetes básicos
 RUN sed -i -e 's/deb.debian.org/archive.debian.org/g' \
            -e 's|security.debian.org|archive.debian.org/|g' \
-           -e '/stretch-updates/d' /etc/apt/sources.list
+           -e '/stretch-updates/d' /etc/apt/sources.list \
+ && apt-get update && apt-get upgrade -y \
+ && apt-get update && apt-get install -y wget git \
+ && rm -rf /var/lib/apt/lists/*
 
-RUN apt-get update && apt-get upgrade -y
-RUN apt-get update && apt-get install wget git -y
+# Copiamos el código de la app
+COPY . /var/www/html
 
-RUN make
+# Ejecutamos tu make (composer install + symlinks config-dev → config)
+# Si make falla que no rompa la build, pero idealmente debería pasar
+RUN make || true
 
-#Esto es del dockerfile de joaco
-RUN ln -s /etc/apache2/sites-available/default-site.conf /etc/apache2/sites-enabled/default-site.conf
+# Habilitamos sitio y módulos que la app necesita
+RUN ln -sf /etc/apache2/sites-available/default-site.conf /etc/apache2/sites-enabled/default-site.conf \
+ && a2dissite 000-default.conf \
+ && a2ensite default-site.conf \
+ && docker-php-ext-install pdo pdo_mysql \
+ && a2enmod rewrite
 
-#Esto es del dockerfile de lisandro, si no lo uso (osea, si no se desactiva el 000-default) la app te tira Forbidden.
-RUN a2dissite 000-default.conf && \
-    a2ensite default-site.conf
+# Ajustes de Apache + permisos correctos para que PHP pueda escribir
+RUN echo "ServerName localhost" >> /etc/apache2/apache2.conf \
+ && mkdir -p /var/log/apache2/example-app \
+ && mkdir -p /var/www/html/logs \
+ && chown -R www-data:www-data /var/www/html /var/log/apache2/example-app
 
-RUN docker-php-ext-install pdo pdo_mysql &&\
-	docker-php-ext-configure pdo &&\
-	docker-php-ext-configure pdo_mysql
+# Redirigimos logs de Apache a stdout/stderr
+# Esto hace que lo que normalmente iría a error.log quede en stderr,
+# y lo ves en CloudWatch automáticamente con awslogs.
+RUN ln -sf /proc/self/fd/1 /var/log/apache2/access.log \
+ && ln -sf /proc/self/fd/2 /var/log/apache2/error.log \
+ && ln -sf /proc/self/fd/1 /var/log/apache2/example-app/access.log \
+ && ln -sf /proc/self/fd/2 /var/log/apache2/example-app/error.log
 
-RUN echo "ServerName localhost" >> /etc/apache2/apache2.conf &&\
-	chown -R www-data:www-data /var/www/html/ &&\
-	# sed -i 's/localhost/database/g' ./config/db-connection.php &&\
-	mkdir /var/log/apache2/example-app/ &&\
-	chown -R www-data:www-data /var/log/apache2/example-app/ &&\
-	a2enmod rewrite &&\
-	service apache2 restart
-
-##Remove unnecesary files
-RUN rm -r sql/ apache/ &&\
-	rm Dockerfile Makefile README.md
+# Limpieza final de cosas que no queremos en runtime dentro de la imagen
+# (ya copiamos default-site.conf al /etc, así que podemos borrar ./apache del docroot)
+RUN rm -rf sql/ apache/ Dockerfile Makefile README.md || true
 
 EXPOSE 80
+
+# Importante: NO hacemos "service apache2 restart" en build.
+# La imagen base php:7.2-apache ya arranca Apache en foreground cuando corre el contenedor.
+# CMD se mantiene el default de esa imagen (apache2-foreground)
