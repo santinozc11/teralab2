@@ -3,55 +3,44 @@ version: 0.2
 env:
   variables:
     AWS_DEFAULT_REGION: us-east-1
-    ECR_REPO: lab2-frontend
-    CONTAINER_NAME: app
+    ECR_REPO: lab2-frontend        
+    CONTAINER_NAME: app            
 
 phases:
   pre_build:
-    commands: |
-      set -euo pipefail
-      # 1) Materializar config/ para que entre en el build (está ignorada en git)
-      if [ ! -d config ] && [ -d config-dev ]; then
-        echo ">> Creando config/ desde config-dev/"
-        mkdir -p config
-        cp -R config-dev/* config/
-      fi
-
-      # 2) Login a ECR
-      ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
-      REPO_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${ECR_REPO}"
-      echo ">> ECR: ${REPO_URI}"
-      aws ecr get-login-password --region "${AWS_DEFAULT_REGION}" \
-        | docker login --username AWS --password-stdin "${REPO_URI}"
-
-      # 3) Tag inmutable a partir del commit
-      COMMIT_SHA="${CODEBUILD_RESOLVED_SOURCE_VERSION:-manual}"
-      IMAGE_TAG="$(echo "${COMMIT_SHA}" | cut -c1-7)"
-      if [ -z "${IMAGE_TAG}" ] || [ "${IMAGE_TAG}" = "manual" ]; then
-        IMAGE_TAG="manual-$(date +%Y%m%d%H%M%S)"
-      fi
-      printf 'REPO_URI=%s\nIMAGE_TAG=%s\n' "${REPO_URI}" "${IMAGE_TAG}" > build.env
-      echo ">> IMAGE_TAG=${IMAGE_TAG}"
+    commands:
+      - set -euo pipefail
+      - echo "Logging in to Amazon ECR..."
+      - ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+      - REGISTRY="${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
+      - REPO_NAME="${ECR_REPO:-$IMAGE_REPO_NAME}"          
+      - REPOSITORY_URI="${REGISTRY}/${REPO_NAME}"
+      - aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "$REGISTRY"
+      - COMMIT_HASH=$(echo "${CODEBUILD_RESOLVED_SOURCE_VERSION:-}" | cut -c 1-7)
+      - IMAGE_TAG="${COMMIT_HASH:-latest}"
+      - echo "REPOSITORY_URI=${REPOSITORY_URI}"; echo "IMAGE_TAG=${IMAGE_TAG}"
+      - printf 'REPOSITORY_URI=%s\nIMAGE_TAG=%s\nCONTAINER_NAME=%s\n' "$REPOSITORY_URI" "$IMAGE_TAG" "${CONTAINER_NAME:-app}" > pipeline.env
 
   build:
-    commands: |
-      set -euo pipefail
-      . ./build.env
-      echo ">> Docker build"
-      docker build -t "${REPO_URI}:${IMAGE_TAG}" -t "${REPO_URI}:latest" .
+    commands:
+      - set -euo pipefail
+      - . ./pipeline.env
+      - echo "Build started on $(date)"
+      - echo "Building the Docker image..."
+      - docker build --no-cache -t "$REPOSITORY_URI:latest" .
+      - docker tag "$REPOSITORY_URI:latest" "$REPOSITORY_URI:$IMAGE_TAG"
 
   post_build:
-    commands: |
-      set -euo pipefail
-      . ./build.env
-      echo ">> Push a ECR"
-      docker push "${REPO_URI}:${IMAGE_TAG}"
-      docker push "${REPO_URI}:latest"
-
-      echo ">> Generando imagedefinitions.json (usa tag fijo)"
-      printf '[{"name":"%s","imageUri":"%s"}]\n' \
-        "${CONTAINER_NAME}" "${REPO_URI}:${IMAGE_TAG}" > imagedefinitions.json
-      cat imagedefinitions.json
+    commands:
+      - set -euo pipefail
+      - . ./pipeline.env
+      - echo "Build completed on $(date)"
+      - echo "Pushing the Docker images..."
+      - docker push "$REPOSITORY_URI:latest"
+      - docker push "$REPOSITORY_URI:$IMAGE_TAG"
+      - echo "Writing image definitions file..."
+      - printf '[{"name":"%s","imageUri":"%s"}]' "$CONTAINER_NAME" "$REPOSITORY_URI:$IMAGE_TAG" > imagedefinitions.json
+      - cat imagedefinitions.json
 
 artifacts:
   files:
