@@ -1,6 +1,6 @@
 # PHP 7.1 sample application
 
-Sample PHP applications that uses: sdsdsd
+Sample PHP applications that uses: Hola!!
 * Dependency Injection
 * Apache routing
 * Composer (aka: Not reinventing the wheel)
