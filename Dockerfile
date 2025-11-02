@@ -1,44 +1,41 @@
 FROM php:7.2-apache
 
-# Vhost primero (se queda en /etc, no depende del repo luego)
+COPY . /var/www/html
 COPY ./apache/default-site.conf /etc/apache2/sites-available/default-site.conf
 
 WORKDIR /var/www/html
 
-# Repos archive para Debian stretch + paquetes básicos
+#Esto es del dockerfile de lisandro, necesario para poder tirar los apt update y upgrade`3
 RUN sed -i -e 's/deb.debian.org/archive.debian.org/g' \
            -e 's|security.debian.org|archive.debian.org/|g' \
-           -e '/stretch-updates/d' /etc/apt/sources.list \
- && apt-get update && apt-get upgrade -y \
- && apt-get install -y wget git \
- && rm -rf /var/lib/apt/lists/*
+           -e '/stretch-updates/d' /etc/apt/sources.list
 
-# Código de la app
-COPY . /var/www/html
+RUN apt-get update && apt-get upgrade -y
+RUN apt-get update && apt-get install wget git -y
 
-# Tu flujo (composer/symlink) tal como lo usás
 RUN make
 
-# Habilitar vhost y módulos necesarios
-RUN ln -sf /etc/apache2/sites-available/default-site.conf /etc/apache2/sites-enabled/default-site.conf \
- && a2dissite 000-default.conf && a2ensite default-site.conf \
- && docker-php-ext-install pdo pdo_mysql \
- && a2enmod rewrite
+#Esto es del dockerfile de joaco
+RUN ln -s /etc/apache2/sites-available/default-site.conf /etc/apache2/sites-enabled/default-site.conf
 
-# 👉 FIX permisos y carpeta de logs de la app
-RUN mkdir -p /var/www/html/logs /var/log/apache2/example-app \
- && chown -R www-data:www-data /var/www/html /var/log/apache2/example-app
+#Esto es del dockerfile de lisandro, si no lo uso (osea, si no se desactiva el 000-default) la app te tira Forbidden.
+RUN a2dissite 000-default.conf && \
+    a2ensite default-site.conf
 
-# 👉 Enviar logs de Apache a stdout/stderr (CloudWatch)
-RUN ln -sf /proc/self/fd/1 /var/log/apache2/access.log \
- && ln -sf /proc/self/fd/2 /var/log/apache2/error.log \
- && ln -sf /proc/self/fd/1 /var/log/apache2/example-app/access.log \
- && ln -sf /proc/self/fd/2 /var/log/apache2/example-app/error.log
+RUN docker-php-ext-install pdo pdo_mysql &&\
+	docker-php-ext-configure pdo &&\
+	docker-php-ext-configure pdo_mysql
 
-# No reiniciamos Apache en build (lo hace apache2-foreground en runtime)
-# (tu línea previa 'service apache2 restart' removida a propósito)
+RUN echo "ServerName localhost" >> /etc/apache2/apache2.conf &&\
+	chown -R www-data:www-data /var/www/html/ &&\
+	# sed -i 's/localhost/database/g' ./config/db-connection.php &&\
+	mkdir /var/log/apache2/example-app/ &&\
+	chown -R www-data:www-data /var/log/apache2/example-app/ &&\
+	a2enmod rewrite &&\
+	service apache2 restart
 
-# Limpieza del árbol copiado (el vhost ya quedó en /etc)
-RUN rm -rf sql/ apache/ Dockerfile Makefile README.md || true
+##Remove unnecesary files
+RUN rm -r sql/ apache/ &&\
+	rm Dockerfile Makefile README.md
 
 EXPOSE 80
