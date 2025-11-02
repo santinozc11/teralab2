@@ -12,14 +12,11 @@ phases:
       set -euo pipefail
       ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
       REPO_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${ECR_REPO}"
-      aws ecr get-login-password --region "${AWS_DEFAULT_REGION}" \
-        | docker login --username AWS --password-stdin "${REPO_URI}"
+      aws ecr get-login-password --region "${AWS_DEFAULT_REGION}" | docker login --username AWS --password-stdin "${REPO_URI}"
 
       COMMIT_SHA="${CODEBUILD_RESOLVED_SOURCE_VERSION:-manual}"
       IMAGE_TAG="$(echo "${COMMIT_SHA}" | cut -c1-7)"
-      if [ -z "${IMAGE_TAG}" ] || [ "${IMAGE_TAG}" = "manual" ]; then
-        IMAGE_TAG="manual-$(date +%Y%m%d%H%M%S)"
-      fi
+      if [ -z "${IMAGE_TAG}" ] || [ "${IMAGE_TAG}" = "manual" ]; then IMAGE_TAG="manual-$(date +%Y%m%d%H%M%S)"; fi
 
       printf 'REPO_URI=%s\nIMAGE_TAG=%s\n' "${REPO_URI}" "${IMAGE_TAG}" > build.env
 
@@ -35,8 +32,7 @@ phases:
       . ./build.env
       docker push "${REPO_URI}:${IMAGE_TAG}"
       docker push "${REPO_URI}:latest"
-      printf '[{"name":"%s","imageUri":"%s"}]\n' \
-        "${CONTAINER_NAME}" "${REPO_URI}:${IMAGE_TAG}" > imagedefinitions.json
+      printf '[{"name":"%s","imageUri":"%s"}]\n' "${CONTAINER_NAME}" "${REPO_URI}:${IMAGE_TAG}" > imagedefinitions.json
       cat imagedefinitions.json
 
 artifacts:
