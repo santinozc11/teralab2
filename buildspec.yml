@@ -1,44 +1,33 @@
 version: 0.2
 
-env:
-  variables:
-    # Tu imagen base estable en ECR (la que FUNCIONA)
-    STABLE_BASE_URI: "607007849260.dkr.ecr.us-east-1.amazonaws.com/lab2-frontend@sha256:7f1ae0dcd122fa0aff3df2673ab58f40b17feff11708ef4531660199ed60ba8f"
-
 phases:
   pre_build:
     commands:
-      - set -euxo pipefail
-      - echo "Login ECR"
-      - >
-        aws ecr get-login-password --region "$AWS_DEFAULT_REGION" |
-        docker login --username AWS --password-stdin \
-          "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com"
+      - echo Logging in to Amazon ECR...
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+      - REPOSITORY_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_REPO_NAME
+      - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+      - IMAGE_TAG=${COMMIT_HASH:=latest}
+      - STABLE_BASE_URI="607007849260.dkr.ecr.us-east-1.amazonaws.com/lab2-frontend@sha256:7f1ae0dcd122fa0aff3df2673ab58f40b17feff11708ef4531660199ed60ba8f"
+      - sed -i -E "1s|^FROM[[:space:]].*|FROM $STABLE_BASE_URI|g" Dockerfile
+      - head -n 1 Dockerfile
 
-      - REPOSITORY_URI="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_REPO_NAME"
-      - COMMIT_HASH="$(echo "$CODEBUILD_RESOLVED_SOURCE_VERSION" | cut -c 1-7 || echo dev)"
-      - IMAGE_TAG="${COMMIT_HASH:-latest}"
-
-      - echo "Pinning Dockerfile base to: $STABLE_BASE_URI"
-      - sed -i -E '1s|^FROM[[:space:]].*|FROM '"$STABLE_BASE_URI"'|g' Dockerfile
-      - head -n 1 Dockerfile  
   build:
     commands:
-      - echo "Docker build sobre TU base estable"
-      - docker build --platform linux/amd64 -t "$REPOSITORY_URI:latest" .
-      - docker tag "$REPOSITORY_URI:latest" "$REPOSITORY_URI:$IMAGE_TAG"
+      - echo Build started on `date`
+      - echo Building the Docker image...
+      - docker build --no-cache -t $REPOSITORY_URI:latest .
+      - docker tag $REPOSITORY_URI:latest $REPOSITORY_URI:$IMAGE_TAG
 
   post_build:
     commands:
-      - echo "Push"
-      - docker push "$REPOSITORY_URI:latest"
-      - docker push "$REPOSITORY_URI:$IMAGE_TAG"
-
-      # Entrego imagedefinitions por TAG inmutable (commit)
-      - echo "Emit imagedefinitions.json → $REPOSITORY_URI:$IMAGE_TAG"
-      - printf '[{"name":"%s","imageUri":"%s"}]\n' "$CONTAINER_NAME" "$REPOSITORY_URI:$IMAGE_TAG" > imagedefinitions.json
+      - echo Build completed on `date`
+      - echo Pushing the Docker images...
+      - docker push $REPOSITORY_URI:latest
+      - docker push $REPOSITORY_URI:$IMAGE_TAG
+      - echo Writing image definitions file...
+      - printf '[{\"name\":\"%s\",\"imageUri\":\"%s\"}]' $CONTAINER_NAME $REPOSITORY_URI:$IMAGE_TAG > imagedefinitions.json
 
 artifacts:
   files:
     - imagedefinitions.json
-  discard-paths: yes
